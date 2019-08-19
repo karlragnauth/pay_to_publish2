@@ -1,0 +1,13 @@
+name: 'Commerce License Pay to Publish'
+description: 'Provides a License type plugin enabling the purchase of licenses upon content creation which controls viewer access.'
+core: 8.x
+package: 'Commerce (contrib)'
+dependencies:
+  - commerce_license
+  - commerce_order
+  - commerce_checkout
+  - permissions_by_term
+  - commerce_cart
+  - commerce_price
+  - menu_ui
+type: module

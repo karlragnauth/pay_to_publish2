@@ -1,0 +1,17 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - commerce_license
+third_party_settings:
+  commerce_license:
+    license_types:
+      commerce_license_pay_to_publish: commerce_license_pay_to_publish
+    activate_on_place: false
+id: pay_to_publish
+label: 'Pay to publish'
+orderItemType: pay_to_publish
+generateTitle: false
+traits:
+  - commerce_license
+locked: false

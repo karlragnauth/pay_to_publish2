@@ -1,0 +1,22 @@
+services:
+# Overrides commerce_license product quantity restrictions in order processing
+  commerce_license_pay_to_publish.license_order_processor:
+    decorates: commerce_license.multiple_license_order_processor
+    class: Drupal\commerce_license_pay_to_publish\PayToPublishOrderProcessorMultiples
+    tags:
+      - { name: commerce_order.order_processor }
+
+# Overrides commerce_license product quantity restriction in cart
+  commerce_license_pay_to_publish.license_multiples_cart_event_subscriber:
+    decorates: commerce_license.license_multiples_cart_event_subscriber
+    class: Drupal\commerce_license_pay_to_publish\EventSubscriber\PayToPublishLicenseMultiplesCartEventSubscriber
+    tags:
+      - { name: event_subscriber }
+
+# Modifies the added to cart message for pay_to_publish content orders
+  commerce_license_pay_to_publish.commerce_cart.cart_subscriber.decorator:
+    public: false
+    class: Drupal\commerce_license_pay_to_publish\EventSubscriber\CartEventSubscriber
+    decorates: commerce_cart.cart_subscriber
+    decoration_priority: 5
+    arguments: ['@messenger', '@string_translation']

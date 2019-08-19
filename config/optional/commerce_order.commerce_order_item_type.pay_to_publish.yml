@@ -1,0 +1,10 @@
+langcode: en
+status: true
+dependencies: {  }
+label: 'Pay to publish'
+id: pay_to_publish
+purchasableEntityType: commerce_product_variation
+orderType: pay_to_publish
+traits:
+  - commerce_license_order_item_type
+locked: false

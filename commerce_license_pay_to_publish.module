@@ -1,0 +1,455 @@
+<?php
+
+use \Drupal\Core\Form\FormStateInterface;
+use \Drupal\Core\Url;
+use \Drupal\Core\StringTranslation\TranslatableMarkup;
+use \Drupal\Core\Entity\EntityInterface;
+
+/**
+ * @file
+ *   Provides core hooks for the Commerce Pay to Publish module.
+ */
+
+/**
+ * Implements hook_help().
+ */
+function commerce_license_pay_to_publish_help($route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match) {
+  switch ($route_name) {
+    case 'help.page.commerce_license_pay_to_publish':
+      $text = file_get_contents(__DIR__ . '/README.md');
+      if (!\Drupal::moduleHandler()->moduleExists('markdown')) {
+        return '<pre>' . $text . '</pre>';
+      }
+      else {
+        // Use the Markdown filter to render the README.
+        $filter_manager = \Drupal::service('plugin.manager.filter');
+        $settings = \Drupal::configFactory()->get('markdown.settings')->getRawData();
+        $config = ['settings' => $settings];
+        $filter = $filter_manager->createInstance('markdown', $config);
+        return $filter->process($text, 'en');
+      }
+  }
+  return NULL;
+}
+
+/**
+ * Fetch the enabled license products for a given entity type.
+ *
+ * @param  $bundle
+ *   Entity type machine name.
+ * @return
+ *   An array of product IDs that are enabled for the given entity type.
+ */
+function commerce_license_pay_to_publish_get_node_type_enabled_products($bundle)
+{
+    $key = 'commerce_license_pay_to_publish_products_' . $bundle;
+    $enabled_products = Drupal::state()->get($key, array());
+    return $enabled_products;
+}
+
+/**
+ * Return price fields as commerce formatted currency string.
+ *
+ * @param  $price
+ *   A price field-type array containing a number and currency code.
+ * @param  $prefix
+ *   Prefix string.
+ * @return
+ *   A string with formatted price.
+ */
+function commerce_license_pay_to_publish_format_price($price, $prefix = null)
+{
+    $currency_formatter = \Drupal::service('commerce_price.currency_formatter');
+    $number = $price[0]['number'];
+    $currency_code = $price[0]['currency_code'];
+    return $prefix . $currency_formatter->format($number, $currency_code);
+}
+
+/**
+ * Fetch a list of available pay to publish products.
+ *
+ * @param  $bundle
+ *   An optional bundle type to filter the list by.
+ * @return array
+ *   Array of product names and prices keyed by product ID.
+ */
+function commerce_license_pay_to_publish_get_product_list($bundle = false)
+{
+
+    // If bundle specified fetch enabled product list for bundle type.
+    if ($bundle) {
+        $enabled_products = commerce_license_pay_to_publish_get_node_type_enabled_products($bundle);
+    }
+
+    $options = [];
+    $available_products = \Drupal::entityManager()
+			->getStorage('commerce_product_variation')->loadMultiple();
+    foreach($available_products as $key => $variation) {
+        $id = $variation->id();
+        $title = $variation->getTitle();
+        $price = $variation->get('price')->getValue();
+
+        // If no bundle is specified add all to list.
+        if (! $bundle) {
+            $options[$id] = commerce_license_pay_to_publish_format_price($price, "$title: ");
+        } elseif($enabled_products[$key]) {
+            // Else limit the list to enabled products only for bundle.
+            $options[$id] = commerce_license_pay_to_publish_format_price($price, "$title: ");
+        }
+    }
+    return $options;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ * Modifies the content-type edit form.
+ */
+function commerce_license_pay_to_publish_form_node_type_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state)
+{
+    $entity = $form_state->getFormObject()->getEntity();
+    $bundle = $entity->Id();
+
+    $product_list = commerce_license_pay_to_publish_get_product_list();
+    $form['commerce_license_pay_to_publish'] = array(
+    '#type' => 'details',
+    '#title' => t('Commerce Pay to Publish'),
+    '#open' => true,
+    '#access' => !empty($product_list),
+    '#group' => 'additional_settings',
+    );
+    $default_value = commerce_license_pay_to_publish_get_node_type_enabled_products($bundle);
+    $form['commerce_license_pay_to_publish']['commerce_license_pay_to_publish_products'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Available product options'),
+    '#default_value' => $default_value,
+    '#options' => $product_list,
+    '#description' => t('Purchasing one of these products will license this node for access.'),
+    );
+    $form['actions']['submit']['#submit'][] = 'commerce_license_pay_to_publish_node_type_submit';
+}
+
+/**
+ * Implements hook_FORM_ID_submit().
+ * Modifies edit content-type form submission.
+ */
+function commerce_license_pay_to_publish_node_type_submit($form, &$form_state)
+{
+    $entity = $form_state->getFormObject()->getEntity();
+    $bundle = $entity->Id();
+    $key = 'commerce_license_pay_to_publish_products_' . $bundle;
+    $products = $form_state->getValue('commerce_license_pay_to_publish_products');
+    \Drupal::state()->set($key, $products);
+}
+
+/**
+ * Returns the last order-item referencing the target entity id
+ *
+ * @param $entity_id
+ *   Entity id to return order-item for.
+ * @return
+ *   Returns an order item with 
+ */
+function get_last_order_item($entity_id = null)
+{
+    if ($entity_id) {
+        // Fetch the latest license pay to publish order item matching this entity.
+        $query = \Drupal::entityTypeManager()
+            ->getStorage('commerce_order_item')->getQuery()
+            ->condition('type', 'pay_to_publish')
+            ->condition('field_target_entity', $entity_id)
+            ->sort('created', 'DESC');
+        $order_items = $query->execute();
+
+        // Load the latest entry, assuming there is only ever one.
+        if ($order_item = entity_load('commerce_order_item', key($order_items))) {
+            return $order_item;
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+}
+
+/**
+ * Fetch an array of license information.
+ *
+ * @param  $entity_id
+ *   Node id to return license details for.
+ * @return array
+ *   Array of license field details.
+ */
+function get_license_data($entity_id)
+{
+    $license_data = null;
+    // If order_item exists, load license.
+    if ($order_item = get_last_order_item($entity_id)) {
+
+        $license_data['order_state'] = null;
+
+        // Get order details.
+        if ($order = $order_item->order_id->entity) {
+            $license_data['order'] = $order;
+            $license_data['order_state'] = $order->state->value;
+
+            $license_data['order_url'] = Url::fromRoute(
+                'entity.commerce_order.user_view', array(
+                'user' => $order->uid->entity->id(),
+                'commerce_order' => $order->order_id->value,
+                )
+            );
+        }
+
+        $license_data['order_title'] = $order_item->title->value;
+        $license_data['license'] = null;
+        $license_data['expires'] = null;
+        $license_data['granted'] = null;
+        $license_data['license_state'] = null;
+
+        // If license entity exists, return license data.
+        if ($license = $order_item->license->entity) {
+            $license_data['license'] = $license;
+            $license_data['license_state'] = $license->state->getString();
+            if (isset($license->expires->value) && ! is_null($license->expires->value)) {
+                $license_data['expires'] = format_date($license->expires->value, 'long');
+            }
+            if (isset($license->granted->value) && ! is_null($license->granted->value)) {
+                $license_data['granted'] = format_date($license->granted->value, 'long');
+            }
+        }
+    }
+    return $license_data;
+}
+
+/**
+ * Implements hook_FORM_ID_alter().
+ * Modifies the node edit form.
+ */
+function commerce_license_pay_to_publish_form_node_form_alter(&$form, &$form_state, $form_id)
+{
+    $entity = $form_state->getFormObject()->getEntity();
+    $list_option_ajax = false;
+
+    // If entity is already created with a licensed order attached.
+    if ($entity_id = $entity->id()){
+
+        // If entity has a license.
+        if($license_data = get_license_data($entity_id)) {
+
+            $markup = null;
+            $order_state = $license_data['order_state'];
+            $order_title = $license_data['order_title'];
+            $granted = $license_data['granted'];
+            $expires = $license_data['expires'];
+
+            $license_state = $license_data['license_state'];
+            switch($license_state) {
+
+            case 'active':
+                    $markup = "Listing option: $order_title<br>State: Active<br>Published: $granted<br>Expires: $expires";
+                break;
+
+            case 'revoked':
+            case 'cancelled':
+                    $markup = "State: Cancelled";
+                break;
+
+            case 'expired':
+                    $markup = "Listing option: $order_title<br>State: Expired<br>Published: $granted<br>Expired: $expires";
+                break;
+    
+            case 'new':
+                // Report order and license summary details.
+                switch($license_data['order_state']) {
+                case 'validation':
+                    $markup = new TranslatableMarkup(
+                        'List option: @list-option<br>Your order to publish this content is awaiting validation. See <a href="@url">order</a>.', array(
+                        '@list-option' => $order_title,
+                        '@url' => $license_data['order_url']->toString(),
+                        )
+                    );
+                    break;
+
+                case 'fulfillment':
+                    $markup = new TranslatableMarkup(
+                        'Your order to publish this content is awaiting fulfillment. See <a href="@url">order</a>.', array(
+                        '@url' => $license_data['order_url']->toString(),
+                        )
+                    );
+                    break;
+                }
+    
+            }
+            // Add order and license summary details to display.
+            if ($markup) {
+                $form['commerce_license_pay_to_publish_info'] = array(
+                '#type' => 'item',
+                '#title' => t('Listing information'),
+                '#markup' => $markup,
+                );
+            }
+
+            // If order has an active license add a relist button.
+            if($license_state == 'active') {
+                   // Add a relist checkbox.
+                   $form['commerce_license_pay_to_publish_relist'] = array(
+                   '#type' => 'checkbox',
+                   '#title' => t('Re-list'),
+                   '#description' => t('Cancel your current subscripton and purchase a new listing option.'),
+                   '#default_value' => 0,
+                   '#access' => 'relist commerce pay to publish',
+                   );
+    
+                   // Prepare ajax toggle for the product list defined below.
+                   $list_option_ajax = array(
+                    'visible' => array(
+                     ':input[name="commerce_license_pay_to_publish_relist"]' => array(
+                     'checked' => true,
+                     ),
+                    )
+                   );
+            }
+        }
+    } 
+
+    $bundle = $entity->bundle();
+
+    // Make sure assigned products are available.
+    if ($enabled_products = commerce_license_pay_to_publish_get_product_list($bundle)) {
+        $product_list = commerce_license_pay_to_publish_get_product_list($bundle);
+        // Add selection options for the product list.
+        $form['commerce_license_pay_to_publish'] = array(
+        '#type' => (count($enabled_products) > 1) ? 'select' : 'radios',
+        '#title' => t('List option'),
+        '#options' => $enabled_products,
+        '#description' => t('Select your desired listing option.'),
+        '#default_value' => key($enabled_products),
+        '#required' => true,
+        );
+        if ($list_option_ajax != false) {
+            $form['commerce_license_pay_to_publish']['#states'] = $list_option_ajax;
+        }
+
+        // Give admins the option to skip checkout.
+        $form['commerce_license_pay_to_publish_skip'] = array(
+        '#type' => 'checkbox',
+        '#title' => t("Don't add to the shopping cart"),
+        '#description' => t('If checked, this node will be created without adding it to the shopping cart. This option is only available for administrators and you will have to manually change the value of the Pay to Publish field.'),
+        '#default_value' => 0,
+        '#access' => 'administer commerce pay to publish',
+        );
+
+        // Include a submit handler.
+        $form['actions']['submit']['#submit'][] = 'commerce_license_pay_to_publish_node_form_submit';
+    }
+
+    // Restrict access to 'field_pay_to_publish' permission_by_term field if defined in the entity.
+		if (isset($form['field_pay_to_publish'])) {
+    	$form['field_pay_to_publish']['#access'] = 'administer commerce pay to publish';
+		}
+}
+
+/**
+ * Form submission handler that executes only when a new node that contains
+ * the product selection widget is saved.
+ *
+ * Adds the published node item to the user's cart.
+ */
+function commerce_license_pay_to_publish_node_form_submit($form, $form_state)
+{
+    $admin_skip = $form_state->getValue('commerce_license_pay_to_publish_skip');
+
+    // Only add to the cart if the admin didn't choose to skip this step.
+    if (!$admin_skip) {
+        $entity_id = $form_state->getFormObject()->getEntity()->id();
+        $license_data = get_license_data($entity_id);
+
+        // Revoke existing license if relist option is chosen.
+        $relist = $form_state->getValue('commerce_license_pay_to_publish_relist');
+        if ($relist && $license = $license_data['license']) {
+            $license->set('state', 'cancelled');
+            $license->save();
+            drupal_set_message(
+                t(
+                    "@order_title listing cancelled.", array(
+                    '@order_title' => $license_data['order_title'],
+                    )
+                )
+            );
+        }
+
+        $product_variation = $form_state->getValue('commerce_license_pay_to_publish');
+
+        if ($product_variation) {
+            // Update the user's cart.
+            $cart_id = commerce_license_pay_to_publish_add_to_cart($entity_id, $product_variation);
+        }
+
+        // Redirect to the user's cart.
+        $cart_url = Url::fromRoute('commerce_cart.page');
+        $form_state->setRedirectUrl($cart_url);
+    }
+}
+
+/**
+ * Implements hook_entity_delete().
+ */
+function commerce_license_pay_to_publish_node_delete($entity)
+{
+    // If an order item for this entity already exists in the cart, delete it. 
+    if ($order_item = get_last_order_item($entity->id())) {
+        $order = $order_item->order_id->entity;
+        if($order->state->value == 'draft') {
+            $order_item->delete();
+        } else {
+            // Else just cancel the license.
+            $license = $order_item->license->entity;
+						$license->set('state', 'cancelled');
+						$license->save();
+        }
+    }
+}
+
+/**
+ * Adds a licensed line item referencing a target entity for publication in the user's cart.
+ *
+ * @param $target_entity_id
+ *   The target entity to be associated with the licensed line item.
+ * @param $product_variation_id.
+ *   The Publish to Pay product variation chosen by the user.
+ * @return $cart_id
+ *   The id of the cart this order item is created in.
+ */
+function commerce_license_pay_to_publish_add_to_cart($target_entity_id, $product_variation_id)
+{
+    $entity_manager = \Drupal::entityManager();
+    $cart_manager = \Drupal::service('commerce_cart.cart_manager');
+    $cart_provider = \Drupal::service('commerce_cart.cart_provider');
+
+    // If a draft order item for this target entity already exists delete it. 
+    if ($order_item = get_last_order_item($entity_id)) {
+        $order = $order_item->order_id->entity;
+        if($order->state->value == 'draft') {
+             $order_item->delete();
+        }
+    } 
+
+    $product_variation = $entity_manager->getStorage('commerce_product_variation')->load($product_variation_id);
+
+		// Get store id from product settings
+		$store_id = $product_variation->product_id->entity->stores->getValue()[0]['target_id'];
+
+		$store = $entity_manager->getStorage('commerce_store')->load($store_id);
+
+    // Fetch existing cart.
+    $cart = $cart_provider->getCart('pay_to_publish', $store);
+
+    // If no cart exists then create a new one.
+    if (!$cart) {
+        $cart = $cart_provider->createCart('pay_to_publish', $store);
+    }
+
+    $order_item = $cart_manager->addEntity($cart, $product_variation, 1, false, true);
+		$order_item->set('field_target_entity', $target_entity_id);
+    $order_item->save();
+}

@@ -1,0 +1,7 @@
+langcode: en
+status: true
+dependencies: {  }
+name: 'Pay to publish'
+vid: pay_to_publish
+description: 'Use pay to publish to define access control (acls) on content using the permissions_by_term module.'
+weight: 0

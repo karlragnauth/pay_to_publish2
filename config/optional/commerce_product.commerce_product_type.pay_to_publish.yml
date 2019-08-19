@@ -1,0 +1,11 @@
+langcode: en
+status: true
+dependencies: {  }
+id: pay_to_publish
+label: 'Pay to publish'
+description: ''
+variationType: pay_to_publish
+multipleVariations: true
+injectVariationFields: true
+traits: {  }
+locked: false

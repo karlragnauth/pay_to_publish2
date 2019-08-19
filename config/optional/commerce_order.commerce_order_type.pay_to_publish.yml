@@ -1,0 +1,21 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - commerce_cart
+    - commerce_checkout
+third_party_settings:
+  commerce_cart:
+    cart_form_view: pay_to_publish_cart_form
+    cart_block_view: commerce_cart_block
+  commerce_checkout:
+    checkout_flow: pay_to_publish
+label: 'Pay to publish'
+id: pay_to_publish
+workflow: order_default
+refresh_mode: customer
+refresh_frequency: 300
+sendReceipt: true
+receiptBcc: ''
+traits: {  }
+locked: false

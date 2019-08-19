@@ -1,0 +1,8 @@
+relist commerce pay to publish:
+  title: 'Relist Commerce Pay to Publish'
+  description: 'Allow user to relist Commerce Pay to Publish content.'
+  restrict access: TRUE
+administer commerce pay to publish:
+  title: 'Administer Commerce Pay to Publish'
+  description: 'Perform administration tasks for Commerce Pay to Publish.'
+  restrict access: TRUE
