@@ -3,11 +3,11 @@ description: 'Provides a License type plugin enabling the purchase of licenses u
 core: 8.x
 package: 'Commerce (contrib)'
 dependencies:
-  - commerce_license
+  - permissions_by_term
   - commerce_order
   - commerce_checkout
-  - permissions_by_term
   - commerce_cart
   - commerce_price
+  - commerce_license
   - menu_ui
 type: module

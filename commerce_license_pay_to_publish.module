@@ -33,21 +33,6 @@ function commerce_license_pay_to_publish_help($route_name, \Drupal\Core\Routing\
 }
 
 /**
- * Fetch the enabled license products for a given entity type.
- *
- * @param  $bundle
- *   Entity type machine name.
- * @return
- *   An array of product IDs that are enabled for the given entity type.
- */
-function commerce_license_pay_to_publish_get_node_type_enabled_products($bundle)
-{
-    $key = 'commerce_license_pay_to_publish_products_' . $bundle;
-    $enabled_products = Drupal::state()->get($key, array());
-    return $enabled_products;
-}
-
-/**
  * Return price fields as commerce formatted currency string.
  *
  * @param  $price
@@ -63,6 +48,30 @@ function commerce_license_pay_to_publish_format_price($price, $prefix = null)
     $number = $price[0]['number'];
     $currency_code = $price[0]['currency_code'];
     return $prefix . $currency_formatter->format($number, $currency_code);
+}
+
+/**
+ * Fetch the enabled license products for a given entity type.
+ *
+ * @param  $bundle
+ *   Entity type machine name.
+ * @return
+ *   An array of product IDs that are enabled for the given entity type.
+ */
+function commerce_license_pay_to_publish_get_node_type_enabled_products($bundle)
+{
+    $key = 'commerce_license_pay_to_publish_products_' . $bundle;
+    $enabled_products = Drupal::state()->get($key, array());
+
+		// Check the products to find if one has been enabled.
+		foreach ($enabled_products as $product) {
+			if (! empty($product)) {
+				// If enabled, return enabled products.
+    		return $enabled_products;
+			}
+		} 
+		// Else return false.
+		return array();
 }
 
 /**
@@ -92,7 +101,7 @@ function commerce_license_pay_to_publish_get_product_list($bundle = false)
         // If no bundle is specified add all to list.
         if (! $bundle) {
             $options[$id] = commerce_license_pay_to_publish_format_price($price, "$title: ");
-        } elseif($enabled_products[$key]) {
+        } elseif(isset($enabled_products[$key])) {
             // Else limit the list to enabled products only for bundle.
             $options[$id] = commerce_license_pay_to_publish_format_price($price, "$title: ");
         }
@@ -161,7 +170,7 @@ function get_last_order_item($entity_id = null)
         $order_items = $query->execute();
 
         // Load the latest entry, assuming there is only ever one.
-        if ($order_item = entity_load('commerce_order_item', key($order_items))) {
+        if (! empty($order_items) && $order_item = entity_load('commerce_order_item', key($order_items))) {
             return $order_item;
         } else {
             return false;
@@ -230,7 +239,8 @@ function commerce_license_pay_to_publish_form_node_form_alter(&$form, &$form_sta
     $entity = $form_state->getFormObject()->getEntity();
     $list_option_ajax = false;
 
-    // If entity is already created with a licensed order attached.
+    // If entity is already created with a licensed order attached report order
+		// and license details.
     if ($entity_id = $entity->id()){
 
         // If entity has a license.
@@ -315,16 +325,20 @@ function commerce_license_pay_to_publish_form_node_form_alter(&$form, &$form_sta
     $bundle = $entity->bundle();
 
     // Make sure assigned products are available.
-    if ($enabled_products = commerce_license_pay_to_publish_get_product_list($bundle)) {
+    //if ($enabled_products = commerce_license_pay_to_publish_get_product_list($bundle)) {
+		$enabled_products = commerce_license_pay_to_publish_get_node_type_enabled_products($bundle);
+
+		if (! empty($enabled_products)) {
         $product_list = commerce_license_pay_to_publish_get_product_list($bundle);
         // Add selection options for the product list.
         $form['commerce_license_pay_to_publish'] = array(
         '#type' => (count($enabled_products) > 1) ? 'select' : 'radios',
         '#title' => t('List option'),
-        '#options' => $enabled_products,
-        '#description' => t('Select your desired listing option.'),
+        '#options' => $product_list,
+        '#description' => t('Select a list option to publish your page. Pages are published upon payment.'),
         '#default_value' => key($enabled_products),
         '#required' => true,
+				'#weight' => 20,
         );
         if ($list_option_ajax != false) {
             $form['commerce_license_pay_to_publish']['#states'] = $list_option_ajax;
@@ -334,9 +348,10 @@ function commerce_license_pay_to_publish_form_node_form_alter(&$form, &$form_sta
         $form['commerce_license_pay_to_publish_skip'] = array(
         '#type' => 'checkbox',
         '#title' => t("Don't add to the shopping cart"),
-        '#description' => t('If checked, this node will be created without adding it to the shopping cart. This option is only available for administrators and you will have to manually change the value of the Pay to Publish field.'),
+        '#description' => t('When checked, this page will be created without adding a pay to publish transaction to the shopping cart.'),
         '#default_value' => 0,
         '#access' => 'administer commerce pay to publish',
+				'#weight' => 21,
         );
 
         // Include a submit handler.
@@ -427,7 +442,7 @@ function commerce_license_pay_to_publish_add_to_cart($target_entity_id, $product
     $cart_provider = \Drupal::service('commerce_cart.cart_provider');
 
     // If a draft order item for this target entity already exists delete it. 
-    if ($order_item = get_last_order_item($entity_id)) {
+    if ($order_item = get_last_order_item($target_entity_id)) {
         $order = $order_item->order_id->entity;
         if($order->state->value == 'draft') {
              $order_item->delete();
